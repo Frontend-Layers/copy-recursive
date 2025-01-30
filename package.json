@@ -1,0 +1,31 @@
+{
+  "name": "copy-recursive",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "mocha",
+    "docs": "jsdoc -c jsdoc.json"
+  },
+  "author": "Frontend Layers",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frontend-layers/copy-recursive.git"
+  },
+  "bugs": {
+    "url": "https://github.com/frontend-layers/copy-recursive/issues"
+  },
+  "homepage": "https://github.com/your-username/copy-recursive#readme",
+  "devDependencies": {
+    "@types/chai": "^5.0.1",
+    "@types/mocha": "^10.0.10",
+    "chai": "^5.1.2",
+    "fs-extra": "^11.3.0",
+    "mocha": "^11.1.0"
+  }
+}
