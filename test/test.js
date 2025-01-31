@@ -1,140 +1,252 @@
+import { expect } from 'chai';
 import fs from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import sinon from 'sinon';
+import copy from '../index.js';
 
-/**
- * Генерирует уникальное имя файла, добавляя суффикс, если файл уже существует.
- *
- * @param {string} filePath - Исходный путь к файлу.
- * @returns {Promise<string>} - Уникальное имя файла.
- */
-async function getUniqueFileName(filePath) {
-  let uniquePath = filePath;
-  let counter = 1;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-  while (true) {
-    try {
-      await fs.access(uniquePath);
-      // Если файл существует, добавляем суффикс
-      const { dir, name, ext } = path.parse(filePath);
-      uniquePath = path.join(dir, `${name}_${counter}${ext}`);
-      counter++;
-    } catch {
-      // Если файл не существует, возвращаем уникальное имя
-      return uniquePath;
-    }
-  }
-}
+const srcPath = path.join(__dirname, 'src');
+const distPath = path.join(__dirname, 'dist');
 
-/**
- * Рекурсивно копирует файл или папку с учётом глубины, высоты, параметра flatten и обработки конфликтов.
- *
- * @param {string} source - Путь к исходному файлу или папке.
- * @param {string} destination - Путь назначения.
- * @param {number} depth - Максимальная глубина копирования.
- * @param {number} height - Максимальная высота копирования (начиная с корня).
- * @param {boolean} flatten - Если true, копирует файлы и папки без сохранения структуры.
- * @param {string} conflictResolution - Стратегия обработки конфликтов: 'overwrite', 'skip', 'rename'.
- * @param {number} currentDepth - Текущая глубина вложенности (по умолчанию 0).
- * @returns {Promise<void>}
- */
-async function copyItem(source, destination, depth, height, flatten, conflictResolution, currentDepth = 0) {
-  try {
-    const stats = await fs.stat(source);
+async function createTestStructure() {
+  await fs.rm(srcPath, { recursive: true, force: true });
+  await fs.rm(distPath, { recursive: true, force: true });
 
-    if (stats.isDirectory()) {
-      // Если текущая глубина превышает depth, игнорируем папку
-      if (depth > 0 && currentDepth >= depth) {
-        console.log(`Ignoring directory (depth limit): ${source}`);
-        return;
+  await fs.mkdir(srcPath, { recursive: true });
+  await fs.mkdir(distPath, { recursive: true });
+
+  // Create test files and directories
+  const structure = {
+    'file1.txt': 'File 1 content',
+    'file2.txt': 'File 2 content',
+    '_redirects': 'Redirects content',
+    '_headers': 'Headers content',
+    'robots.txt': 'Robots content',
+    'favicon.ico': 'Favicon content',
+    'folder1/': {
+      'file3.txt': 'File 3 content',
+      'folder2/': {
+        'file4.txt': 'File 4 content'
       }
+    },
+    'folder3/': {
+      'file5.txt': 'File 5 content'
+    },
+    'emptyFolder/': {},
+    'video/': {},
+    'fonts/': {},
+    'favicons/': {},
+    'report/': {}
+  };
 
-      // Если текущая высота превышает height, игнорируем папку
-      if (height > 0 && currentDepth >= height) {
-        console.log(`Ignoring directory (height limit): ${source}`);
-        return;
-      }
-
-      // Если папка пустая и flatten = true, игнорируем её
-      const items = await fs.readdir(source);
-      if (items.length === 0 && flatten) {
-        console.log(`Ignoring empty directory: ${source}`);
-        return;
-      }
-
-      // Если flatten = false, создаём папку в destination
-      if (!flatten) {
-        await fs.mkdir(destination, { recursive: true });
-        console.log(`Directory created: ${destination}`);
-      }
-
-      // Рекурсивно копируем содержимое папки
-      for (const item of items) {
-        const sourcePath = path.join(source, item);
-        const destPath = flatten ? path.join(destination, path.basename(item)) : path.join(destination, item);
-        await copyItem(sourcePath, destPath, depth, height, flatten, conflictResolution, currentDepth + 1);
-      }
-    } else {
-      // Если это файл, обрабатываем конфликты
-      const destPath = flatten ? path.join(destination, path.basename(source)) : destination;
-
-      try {
-        await fs.access(destPath); // Проверяем, существует ли файл
-
-        // Обработка конфликтов
-        switch (conflictResolution) {
-          case 'overwrite':
-            await fs.copyFile(source, destPath);
-            console.log(`File overwritten: ${source} to ${destPath}`);
-            break;
-
-          case 'skip':
-            console.log(`File skipped (already exists): ${destPath}`);
-            break;
-
-          case 'rename':
-            const uniquePath = await getUniqueFileName(destPath);
-            await fs.copyFile(source, uniquePath);
-            console.log(`File renamed and copied: ${source} to ${uniquePath}`);
-            break;
-
-          default:
-            throw new Error(`Unknown conflict resolution strategy: ${conflictResolution}`);
+  async function createFiles(basePath, struct) {
+    for (const [name, content] of Object.entries(struct)) {
+      const fullPath = path.join(basePath, name);
+      if (name.endsWith('/')) {
+        await fs.mkdir(fullPath, { recursive: true });
+        if (typeof content === 'object') {
+          await createFiles(fullPath, content);
         }
-      } catch {
-        // Если файл не существует, просто копируем
-        await fs.copyFile(source, destPath);
-        console.log(`File copied: ${source} to ${destPath}`);
+      } else {
+        await fs.writeFile(fullPath, content);
       }
-    }
-  } catch (err) {
-    console.error(`Error copying ${source}:`, err.message);
-  }
-}
-
-/**
- * Копирует файлы и папки на основе конфигурации.
- *
- * @param {Object[]} cfg - Конфигурация с полями src, dest, depth, height, flatten и conflictResolution.
- * @param {Function} done - Callback функция (не используется в этом примере).
- */
-export default async function copy(cfg, done) {
-  // Проходим по каждому элементу конфигурации
-  for (const item of cfg) {
-    const { src, dest, depth = 0, height = 0, flatten = false, conflictResolution = 'overwrite' } = item;
-
-    console.log('Processing item:', { src, dest, depth, height, flatten, conflictResolution });
-
-    // Если src - массив, обрабатываем каждый элемент
-    if (Array.isArray(src)) {
-      for (const source of src) {
-        const destination = flatten ? dest : dest; // Если flatten = true, копируем в dest напрямую
-        await copyItem(source, destination, depth, height, flatten, conflictResolution);
-      }
-    } else {
-      const destination = flatten ? dest : dest; // Если flatten = true, копируем в dest напрямую
-      await copyItem(src, destination, depth, height, flatten, conflictResolution);
     }
   }
 
-  if (done) done(); // Вызываем callback, если он передан
+  await createFiles(srcPath, structure);
 }
+
+async function clearDist() {
+  await fs.rm(distPath, { recursive: true, force: true });
+  await fs.mkdir(distPath, { recursive: true });
+}
+
+describe('Copy Script Tests', () => {
+  let consoleLogStub;
+  let consoleErrorStub;
+
+  before(async () => {
+    await createTestStructure();
+  });
+
+  beforeEach(async () => {
+    await clearDist();
+    consoleLogStub = sinon.stub(console, 'log');
+    consoleErrorStub = sinon.stub(console, 'error');
+  });
+
+  afterEach(() => {
+    consoleLogStub.restore();
+    consoleErrorStub.restore();
+  });
+
+  describe('Conflict Resolution Tests', () => {
+    it('should rename files when conflictResolution = "rename"', async () => {
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        flatten: true,
+        conflictResolution: 'rename'
+      }]);
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        flatten: true,
+        conflictResolution: 'rename'
+      }]);
+
+      const files = await fs.readdir(distPath);
+      expect(files).to.include.members(['file1.txt', 'file1_1.txt']);
+
+      const content1 = await fs.readFile(path.join(distPath, 'file1.txt'), 'utf8');
+      const content2 = await fs.readFile(path.join(distPath, 'file1_1.txt'), 'utf8');
+      expect(content1).to.equal('File 1 content');
+      expect(content2).to.equal('File 1 content');
+    });
+
+    it('should skip files when conflictResolution = "skip"', async () => {
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        flatten: true,
+        conflictResolution: 'skip'
+      }]);
+
+      // Modify the first file to check if it's not overwritten
+      await fs.writeFile(path.join(distPath, 'file1.txt'), 'Modified content');
+
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        flatten: true,
+        conflictResolution: 'skip'
+      }]);
+
+      const files = await fs.readdir(distPath);
+      expect(files).to.have.lengthOf(1);
+      expect(files).to.include('file1.txt');
+
+      const content = await fs.readFile(path.join(distPath, 'file1.txt'), 'utf8');
+      expect(content).to.equal('Modified content');
+    });
+
+    it('should overwrite files when conflictResolution = "overwrite"', async () => {
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        flatten: true,
+        conflictResolution: 'overwrite'
+      }]);
+
+      // Modify the first file
+      await fs.writeFile(path.join(distPath, 'file1.txt'), 'Modified content');
+
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        flatten: true,
+        conflictResolution: 'overwrite'
+      }]);
+
+      const content = await fs.readFile(path.join(distPath, 'file1.txt'), 'utf8');
+      expect(content).to.equal('File 1 content');
+    });
+  });
+
+  describe('Logging Tests', () => {
+    it('should not log anything when logLevel = "none"', async () => {
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        logLevel: 'none'
+      }]);
+
+      expect(consoleLogStub.called).to.be.false;
+    });
+
+    it('should log verbose information when logLevel = "verbose"', async () => {
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        logLevel: 'verbose'
+      }]);
+
+      expect(consoleLogStub.called).to.be.true;
+      expect(consoleLogStub.firstCall.args[0]).to.include('Copied:');
+    });
+
+    it('should log brief information when logLevel = "brief"', async () => {
+      await copy([{
+        src: path.join(srcPath, 'file1.txt'),
+        dest: distPath,
+        logLevel: 'brief'
+      }]);
+
+      expect(consoleLogStub.called).to.be.true;
+      const logs = consoleLogStub.args.map(args => args[0]).join('\n');
+      expect(logs).to.include('Starting copy task');
+      expect(logs).to.include('→');
+    });
+  });
+
+  describe('Error Handling Tests', () => {
+    it('should handle non-existent source path', async () => {
+      await copy([{
+        src: path.join(srcPath, 'nonexistent.txt'),
+        dest: distPath,
+        logLevel: 'brief'
+      }]);
+
+      expect(consoleErrorStub.called).to.be.true;
+      expect(consoleErrorStub.firstCall.args[0]).to.include('Error copying');
+    });
+
+    it('should handle copying to existing file as directory', async () => {
+      // Create a file at the destination path
+      await fs.writeFile(path.join(distPath, 'folder1'), 'This is a file');
+
+      await copy([{
+        src: path.join(srcPath, 'folder1'),
+        dest: distPath
+      }]);
+
+      expect(consoleErrorStub.called).to.be.true;
+      expect(consoleErrorStub.firstCall.args[0]).to.include('Error copying');
+    });
+  });
+
+  describe('Feature Tests', () => {
+    it('should respect maximum depth parameter', async () => {
+      await copy([{
+        src: srcPath,
+        dest: distPath,
+        depth: 1
+      }]);
+
+      const hasDeepFile = await fs.access(path.join(distPath, 'folder1', 'folder2', 'file4.txt'))
+        .then(() => true)
+        .catch(() => false);
+
+      expect(hasDeepFile).to.be.false;
+    });
+
+    it('should handle array of source paths', async () => {
+      await copy([{
+        src: [
+          path.join(srcPath, 'file1.txt'),
+          path.join(srcPath, 'file2.txt')
+        ],
+        dest: distPath,
+        logLevel: 'brief'
+      }]);
+
+      const files = await fs.readdir(distPath);
+      expect(files).to.include.members(['file1.txt', 'file2.txt']);
+    });
+
+  });
+});
